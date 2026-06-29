@@ -6,6 +6,7 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -30,6 +31,34 @@ public class CubeChatClient {
     private static final ButtonArea localButton = new ButtonArea();
     private static final ButtonArea globalButton = new ButtonArea();
     private static final ButtonArea privateButton = new ButtonArea();
+
+    @SubscribeEvent
+    public static void onClientChatReceived(ClientChatReceivedEvent event) {
+        Component message = event.getMessage();
+        if (message == null) {
+            return;
+        }
+
+        String text = message.getString();
+        if (text == null || text.isBlank()) {
+            return;
+        }
+
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+
+        if (CubeChat.shouldHideJoinLeaveMessages() && isVanillaJoinMessage(lower)) {
+            event.setCanceled(true);
+        }
+    }
+
+    private static boolean isVanillaJoinMessage(String lower) {
+        return lower.contains("присоединился к игре")
+                || lower.contains("присоединилась к игре")
+                || lower.contains("joined the game")
+                || lower.contains("покинул игру")
+                || lower.contains("покинула игру")
+                || lower.contains("left the game");
+    }
 
     @SubscribeEvent
     public static void onRenderChatScreen(ScreenEvent.Render.Post event) {

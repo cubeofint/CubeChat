@@ -82,6 +82,7 @@ public class CubeChat {
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_PREFIX;
     private static final ForgeConfigSpec.BooleanValue USE_EXCLAMATION_FOR_GLOBAL;
     private static final ForgeConfigSpec.BooleanValue SHOW_CHAT_PANEL_ON_JOIN;
+    private static final ForgeConfigSpec.BooleanValue HIDE_JOIN_LEAVE_MESSAGES;
 
     private static final ForgeConfigSpec.BooleanValue DISCORD_ENABLED;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_BOT_TOKEN;
@@ -174,6 +175,10 @@ public class CubeChat {
         SHOW_CHAT_PANEL_ON_JOIN = builder
                 .comment("If true, short chat hint will be shown when player joins.")
                 .define("show_chat_panel_on_join", true);
+
+        HIDE_JOIN_LEAVE_MESSAGES = builder
+                .comment("If true, CubeChat hides vanilla player join and leave messages on clients with the mod installed.")
+                .define("hide_join_leave_messages", true);
 
         builder.pop();
 
@@ -311,6 +316,14 @@ public class CubeChat {
     }
 
 
+    public static boolean shouldHideJoinLeaveMessages() {
+        try {
+            return HIDE_JOIN_LEAVE_MESSAGES.get();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
     private static void registerNetwork() {
         if (NETWORK_REGISTERED) {
             return;
@@ -332,7 +345,6 @@ public class CubeChat {
         loadLastLocations();
         loadWarns();
         loadPunishmentHistory();
-
         CubeDiscordBridge.start(
                 CURRENT_SERVER,
                 DISCORD_ENABLED.get(),
