@@ -61,9 +61,13 @@ public class CubeChat {
 
     private static final ForgeConfigSpec.BooleanValue DISCORD_ENABLED;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_BOT_TOKEN;
+    private static final ForgeConfigSpec.ConfigValue<String> DISCORD_WEBHOOK_URL;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_CHANNEL_ID;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_LOG_CHANNEL_ID;
     private static final ForgeConfigSpec.BooleanValue DISCORD_SEND_SERVER_STATUS;
+    private static final ForgeConfigSpec.BooleanValue DISCORD_ONLINE_STATUS_ENABLED;
+    private static final ForgeConfigSpec.ConfigValue<String> DISCORD_ONLINE_STATUS_CHANNEL_ID;
+    private static final ForgeConfigSpec.IntValue DISCORD_ONLINE_STATUS_UPDATE_SECONDS;
     private static final ForgeConfigSpec.BooleanValue DISCORD_SEND_GLOBAL_CHAT;
     private static final ForgeConfigSpec.BooleanValue DISCORD_SEND_LOCAL_CHAT;
     private static final ForgeConfigSpec.BooleanValue DISCORD_SEND_PRIVATE_CHAT;
@@ -161,6 +165,10 @@ public class CubeChat {
                 .comment("Discord bot token. Do not share it.")
                 .define("bot_token", "TOKEN_HERE");
 
+        DISCORD_WEBHOOK_URL = builder
+                .comment("Discord webhook URL for Minecraft -> Discord player messages. If empty, the bot sends messages normally.")
+                .define("webhook_url", "");
+
         DISCORD_CHANNEL_ID = builder
                 .comment("Discord channel ID.")
                 .define("channel_id", "CHANNEL_ID_HERE");
@@ -172,6 +180,18 @@ public class CubeChat {
         DISCORD_SEND_SERVER_STATUS = builder
                 .comment("Send server start/stop messages to Discord.")
                 .define("send_server_status", true);
+
+        DISCORD_ONLINE_STATUS_ENABLED = builder
+                .comment("Keep one Discord message updated with current server online list.")
+                .define("online_status_enabled", true);
+
+        DISCORD_ONLINE_STATUS_CHANNEL_ID = builder
+                .comment("Discord channel ID for online status message. If empty, main channel_id is used.")
+                .define("online_status_channel_id", "");
+
+        DISCORD_ONLINE_STATUS_UPDATE_SECONDS = builder
+                .comment("How often to edit the online status message.")
+                .defineInRange("online_status_update_seconds", 60, 15, 3600);
 
         DISCORD_SEND_GLOBAL_CHAT = builder
                 .comment("Send global Minecraft chat to Discord.")
@@ -206,9 +226,13 @@ public class CubeChat {
                 CURRENT_SERVER,
                 DISCORD_ENABLED.get(),
                 DISCORD_BOT_TOKEN.get(),
+                DISCORD_WEBHOOK_URL.get(),
                 DISCORD_CHANNEL_ID.get(),
                 DISCORD_LOG_CHANNEL_ID.get(),
-                DISCORD_SEND_SERVER_STATUS.get()
+                DISCORD_SEND_SERVER_STATUS.get(),
+                DISCORD_ONLINE_STATUS_ENABLED.get(),
+                DISCORD_ONLINE_STATUS_CHANNEL_ID.get(),
+                DISCORD_ONLINE_STATUS_UPDATE_SECONDS.get()
         );
     }
 
@@ -927,7 +951,11 @@ public class CubeChat {
         }
 
         if (DISCORD_SEND_GLOBAL_CHAT.get()) {
-            CubeDiscordBridge.sendToDiscord(discordFormatted);
+            CubeDiscordBridge.sendPlayerMessageToDiscord(
+                    getDiscordDisplayName(player, GLOBAL_PREFIX.get()),
+                    message,
+                    player.getUUID().toString()
+            );
         }
 
         System.out.println("[GlobalChat] " + stripColor(timePrefix(player) + withoutTime));
@@ -1861,6 +1889,25 @@ public class CubeChat {
         return ZonedDateTime
                 .ofInstant(java.time.Instant.ofEpochMilli(millis), MOSCOW_ZONE)
                 .format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"));
+    }
+
+    public static String getDiscordDisplayName(ServerPlayer player) {
+        return getDiscordDisplayName(player, "");
+    }
+
+    public static String getDiscordDisplayName(ServerPlayer player, String channelPrefix) {
+        String displayName = color(channelPrefix == null ? "" : channelPrefix)
+                + getLuckPermsPrefix(player)
+                + getStaffTag(player)
+                + player.getGameProfile().getName();
+
+        displayName = stripColor(displayName).trim().replaceAll("\\s+", " ");
+
+        if (displayName.length() > 80) {
+            displayName = displayName.substring(0, 80);
+        }
+
+        return displayName;
     }
 
     private static String getLuckPermsPrefix(ServerPlayer player) {

@@ -8,7 +8,22 @@ import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.fml.loading.FMLPaths;
 import org.jetbrains.annotations.NotNull;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class CubeDiscordBridge {
     private static JDA jda;
@@ -18,17 +33,34 @@ public class CubeDiscordBridge {
     private static boolean enabled = false;
     private static boolean sendServerStatus = true;
 
+    private static String webhookUrl = "";
+    private static boolean onlineStatusEnabled = false;
+    private static String onlineStatusChannelId = "";
+    private static int onlineStatusUpdateSeconds = 60;
+    private static ScheduledExecutorService onlineStatusExecutor;
+    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+
     public static void start(
             MinecraftServer minecraftServer,
             boolean bridgeEnabled,
             String token,
+            String configuredWebhookUrl,
             String channelId,
             String logChannelId,
-            boolean statusMessages
+            boolean statusMessages,
+            boolean configuredOnlineStatusEnabled,
+            String configuredOnlineStatusChannelId,
+            int configuredOnlineStatusUpdateSeconds
     ) {
         server = minecraftServer;
         enabled = bridgeEnabled;
         sendServerStatus = statusMessages;
+        webhookUrl = configuredWebhookUrl == null ? "" : configuredWebhookUrl.trim();
+        onlineStatusEnabled = configuredOnlineStatusEnabled;
+        onlineStatusChannelId = configuredOnlineStatusChannelId == null ? "" : configuredOnlineStatusChannelId.trim();
+        onlineStatusUpdateSeconds = Math.max(15, configuredOnlineStatusUpdateSeconds);
+
+        stopOnlineStatusUpdater();
 
         if (!enabled) {
             System.out.println("[CubeDiscord] Discord bridge is disabled.");
@@ -82,6 +114,8 @@ public class CubeDiscordBridge {
                     if (sendServerStatus) {
                         sendToDiscord("**[A] сервер включился!**");
                     }
+
+                    startOnlineStatusUpdater();
                 } catch (Exception e) {
                     System.out.println("[CubeDiscord] Failed to start Discord bridge: " + e.getMessage());
                 }
@@ -93,6 +127,9 @@ public class CubeDiscordBridge {
     }
 
     public static void stop() {
+        updateOnlineStatusMessageNow();
+        stopOnlineStatusUpdater();
+
         if (sendServerStatus) {
             sendToDiscord("**[A] сервер выключился**");
         }
@@ -132,6 +169,47 @@ public class CubeDiscordBridge {
                     .queue();
         } catch (Throwable e) {
             System.out.println("[CubeDiscord] Failed to send message: " + e.getMessage());
+        }
+    }
+
+    public static void sendPlayerMessageToDiscord(String username, String message, String uuid) {
+        if (!enabled || message == null || message.isBlank()) {
+            return;
+        }
+
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            String fallbackName = username == null || username.isBlank() ? "Minecraft" : username;
+            sendToDiscord("**" + sanitizeMessageForDiscord(fallbackName) + "**: " + sanitizeMessageForDiscord(message));
+            return;
+        }
+
+        String safeUsername = username == null || username.isBlank() ? "Minecraft" : username.trim();
+        if (safeUsername.length() > 80) {
+            safeUsername = safeUsername.substring(0, 80);
+        }
+
+        String avatarUrl = buildAvatarUrl(uuid);
+        String payload = "{"
+                + "\"username\":\"" + jsonEscape(safeUsername) + "\","
+                + "\"content\":\"" + jsonEscape(sanitizeMessageForDiscord(message)) + "\","
+                + "\"allowed_mentions\":{\"parse\":[]}"
+                + (avatarUrl.isBlank() ? "" : ",\"avatar_url\":\"" + jsonEscape(avatarUrl) + "\"")
+                + "}";
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(webhookUrl))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                    .build();
+
+            HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+                    .exceptionally(error -> {
+                        System.out.println("[CubeDiscord] Failed to send webhook message: " + error.getMessage());
+                        return null;
+                    });
+        } catch (Throwable e) {
+            System.out.println("[CubeDiscord] Failed to build webhook request: " + e.getMessage());
         }
     }
 
@@ -179,8 +257,6 @@ public class CubeDiscordBridge {
 
         String author = event.getAuthor().getName();
 
-        // ВАЖНО:
-        // getContentRaw() не превращает Discord emoji в ссылки CDN.
         String message = event.getMessage().getContentRaw();
 
         message = removeBotMention(event, message);
@@ -207,6 +283,164 @@ public class CubeDiscordBridge {
         server.execute(() -> CubeChat.broadcastDiscordMessage(author, finalMessage, finalReplyToMinecraftPlayer));
     }
 
+    private static void startOnlineStatusUpdater() {
+        if (!enabled || !onlineStatusEnabled || jda == null || server == null) {
+            return;
+        }
+
+        stopOnlineStatusUpdater();
+
+        onlineStatusExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "CubeDiscord-OnlineStatus");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        onlineStatusExecutor.scheduleAtFixedRate(
+                CubeDiscordBridge::updateOnlineStatusMessageNow,
+                5L,
+                onlineStatusUpdateSeconds,
+                TimeUnit.SECONDS
+        );
+    }
+
+    private static void stopOnlineStatusUpdater() {
+        if (onlineStatusExecutor != null) {
+            try {
+                onlineStatusExecutor.shutdownNow();
+            } catch (Throwable ignored) {
+            }
+        }
+
+        onlineStatusExecutor = null;
+    }
+
+    private static void updateOnlineStatusMessageNow() {
+        if (!enabled || !onlineStatusEnabled || jda == null || server == null) {
+            return;
+        }
+
+        TextChannel statusChannel = getOnlineStatusChannel();
+        if (statusChannel == null) {
+            return;
+        }
+
+        String messageText = buildOnlineStatusMessage();
+        String messageId = loadOnlineStatusMessageId();
+
+        if (messageId == null || messageId.isBlank()) {
+            sendNewOnlineStatusMessage(statusChannel, messageText);
+            return;
+        }
+
+        statusChannel.retrieveMessageById(messageId).queue(
+                message -> message.editMessage(messageText).queue(
+                        success -> {},
+                        error -> {
+                            System.out.println("[CubeDiscord] Failed to edit online status message: " + error.getMessage());
+                            sendNewOnlineStatusMessage(statusChannel, messageText);
+                        }
+                ),
+                error -> {
+                    System.out.println("[CubeDiscord] Online status message not found, creating a new one.");
+                    sendNewOnlineStatusMessage(statusChannel, messageText);
+                }
+        );
+    }
+
+    private static TextChannel getOnlineStatusChannel() {
+        if (jda == null) {
+            return null;
+        }
+
+        if (onlineStatusChannelId != null && !onlineStatusChannelId.isBlank()) {
+            TextChannel channel = jda.getTextChannelById(onlineStatusChannelId);
+            if (channel != null) {
+                return channel;
+            }
+        }
+
+        return textChannel;
+    }
+
+    private static void sendNewOnlineStatusMessage(TextChannel channel, String messageText) {
+        try {
+            channel.sendMessage(messageText).queue(message -> {
+                saveOnlineStatusMessageId(message.getId());
+                System.out.println("[CubeDiscord] Created online status message. Pin this message in Discord. ID: " + message.getId());
+            }, error -> System.out.println("[CubeDiscord] Failed to create online status message: " + error.getMessage()));
+        } catch (Throwable e) {
+            System.out.println("[CubeDiscord] Failed to send online status message: " + e.getMessage());
+        }
+    }
+
+    private static String buildOnlineStatusMessage() {
+        MinecraftServer minecraftServer = server;
+        if (minecraftServer == null) {
+            return "🔴 **Cube Of Interest** — сервер выключен";
+        }
+
+        List<ServerPlayer> players = minecraftServer.getPlayerList().getPlayers();
+        int online = players.size();
+        int max = minecraftServer.getPlayerList().getMaxPlayers();
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("🟢 **Cube Of Interest** — онлайн: **")
+                .append(online)
+                .append("/")
+                .append(max)
+                .append("**\n");
+
+        if (online <= 0) {
+            builder.append("\nИгроков онлайн нет.");
+            return builder.toString();
+        }
+
+        builder.append("\n**Игроки:**\n");
+
+        int added = 0;
+        for (ServerPlayer player : players) {
+            String line = "• " + CubeChat.getDiscordDisplayName(player) + "\n";
+
+            if (builder.length() + line.length() > 1900) {
+                builder.append("• ...и ещё ").append(online - added).append("\n");
+                break;
+            }
+
+            builder.append(line);
+            added++;
+        }
+
+        return builder.toString();
+    }
+
+    private static Path onlineStatusMessageIdPath() {
+        return FMLPaths.CONFIGDIR.get().resolve("cubechat-discord-online-message-id.txt");
+    }
+
+    private static String loadOnlineStatusMessageId() {
+        try {
+            Path path = onlineStatusMessageIdPath();
+            if (!Files.exists(path)) {
+                return "";
+            }
+
+            return Files.readString(path, StandardCharsets.UTF_8).trim();
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static void saveOnlineStatusMessageId(String messageId) {
+        try {
+            Path path = onlineStatusMessageIdPath();
+            Files.createDirectories(path.getParent());
+            Files.writeString(path, messageId == null ? "" : messageId.trim(), StandardCharsets.UTF_8);
+        } catch (Throwable e) {
+            System.out.println("[CubeDiscord] Failed to save online status message ID: " + e.getMessage());
+        }
+    }
+
     private static String removeBotMention(MessageReceivedEvent event, String message) {
         if (message == null || message.isBlank()) {
             return message;
@@ -215,10 +449,8 @@ public class CubeDiscordBridge {
         String botId = event.getJDA().getSelfUser().getId();
         String botName = event.getJDA().getSelfUser().getName();
 
-        // Убирает упоминание вида <@123> или <@!123>
         message = message.replaceFirst("^<@!?" + java.util.regex.Pattern.quote(botId) + ">\\s*", "");
 
-        // Убирает отображаемое упоминание вида @Crazer
         message = message.replaceFirst("^@" + java.util.regex.Pattern.quote(botName) + "\\s*", "");
 
         return message.trim();
@@ -229,18 +461,13 @@ public class CubeDiscordBridge {
             return text;
         }
 
-        // Кастомные Discord emoji:
-        // <:name:id> и <a:name:id>
         text = text.replaceAll("<a?:[a-zA-Z0-9_~]+:\\d+>", "");
 
-        // Если где-то всё-таки прилетела markdown-ссылка на emoji CDN
         text = text.replaceAll("\\[[^\\]]*]\\(https://cdn\\.discordapp\\.com/emojis/[^)]*\\)", "");
 
-        // Обычные unicode emoji
         text = text.replaceAll("[\\x{1F300}-\\x{1FAFF}]", "");
         text = text.replaceAll("[\\x{2600}-\\x{27BF}]", "");
 
-        // Variation selectors и zero-width joiner, которые часто остаются после emoji
         text = text.replaceAll("[\\x{FE00}-\\x{FE0F}]", "");
         text = text.replaceAll("\\x{200D}", "");
 
@@ -259,11 +486,9 @@ public class CubeDiscordBridge {
 
         String beforeColon = text.substring(0, colon).trim();
 
-        // Убираем время, если оно вдруг осталось: [23:56 МСК]
-        beforeColon = beforeColon.replaceFirst("^\\[[^\\]]+\\]\\s*", "");
+        beforeColon = beforeColon.replaceFirst("^\\[[^\\]]+]\\s*", "");
 
-        // Убираем канал: [G], [L], [PM]
-        beforeColon = beforeColon.replaceFirst("^\\[[^\\]]+\\]\\s*", "");
+        beforeColon = beforeColon.replaceFirst("^\\[[^\\]]+]\\s*", "");
 
         String[] parts = beforeColon.trim().split("\\s+");
 
@@ -278,5 +503,49 @@ public class CubeDiscordBridge {
         return message
                 .replace("@everyone", "@\u200Beveryone")
                 .replace("@here", "@\u200Bhere");
+    }
+
+    private static String buildAvatarUrl(String uuid) {
+        if (uuid == null || uuid.isBlank()) {
+            return "";
+        }
+
+        try {
+            UUID parsed = UUID.fromString(uuid);
+            return "https://crafatar.com/avatars/" + parsed + "?overlay";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static String jsonEscape(String text) {
+        if (text == null) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+
+            switch (c) {
+                case '\\' -> builder.append("\\\\");
+                case '"' -> builder.append("\\\"");
+                case '\b' -> builder.append("\\b");
+                case '\f' -> builder.append("\\f");
+                case '\n' -> builder.append("\\n");
+                case '\r' -> builder.append("\\r");
+                case '\t' -> builder.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        builder.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        builder.append(c);
+                    }
+                }
+            }
+        }
+
+        return builder.toString();
     }
 }
