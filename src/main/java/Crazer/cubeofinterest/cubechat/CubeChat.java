@@ -8,6 +8,7 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.user.User;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
@@ -85,6 +86,7 @@ public class CubeChat {
     private static final ForgeConfigSpec.BooleanValue DISCORD_ENABLED;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_BOT_TOKEN;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_WEBHOOK_URL;
+    private static final ForgeConfigSpec.ConfigValue<String> DISCORD_AVATAR_URL_TEMPLATE;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_CHANNEL_ID;
     private static final ForgeConfigSpec.ConfigValue<String> DISCORD_LOG_CHANNEL_ID;
     private static final ForgeConfigSpec.BooleanValue DISCORD_SEND_SERVER_STATUS;
@@ -212,6 +214,10 @@ public class CubeChat {
                 .comment("Discord webhook URL for Minecraft -> Discord player messages. If empty, the bot sends messages normally.")
                 .define("webhook_url", "");
 
+        DISCORD_AVATAR_URL_TEMPLATE = builder
+                .comment("Avatar URL template for Minecraft -> Discord webhook messages. Use %username% for player name and %uuid% for UUID. Example: https://mawlee.org/api/skin-api/skins/%username%.png")
+                .define("avatar_url_template", "https://mawlee.org/api/skin-api/skins/%username%.png");
+
         DISCORD_CHANNEL_ID = builder
                 .comment("Discord channel ID.")
                 .define("channel_id", "CHANNEL_ID_HERE");
@@ -330,6 +336,7 @@ public class CubeChat {
                 DISCORD_ENABLED.get(),
                 DISCORD_BOT_TOKEN.get(),
                 DISCORD_WEBHOOK_URL.get(),
+                DISCORD_AVATAR_URL_TEMPLATE.get(),
                 DISCORD_CHANNEL_ID.get(),
                 DISCORD_LOG_CHANNEL_ID.get(),
                 DISCORD_SEND_SERVER_STATUS.get(),
@@ -449,7 +456,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("mute")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.mute"))
                         .then(Commands.argument("target", EntityArgument.player())
                                 .then(Commands.argument("time", StringArgumentType.word())
                                         .executes(ctx -> {
@@ -500,7 +507,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("unmute")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.mute"))
                         .then(Commands.argument("target", EntityArgument.player())
                                 .executes(ctx -> {
                                     ServerPlayer target = EntityArgument.getPlayer(ctx, "target");
@@ -525,7 +532,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("unban")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.unban"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .executes(ctx -> {
@@ -543,7 +550,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("tempban")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.tempban"))
                         .then(Commands.argument("target", EntityArgument.player())
                                 .then(Commands.argument("time", StringArgumentType.word())
                                         .executes(ctx -> {
@@ -593,7 +600,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("untempban")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.tempban"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .executes(ctx -> {
@@ -616,7 +623,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("warn")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.warn"))
                         .then(Commands.argument("target", EntityArgument.player())
                                 .executes(ctx -> {
                                     ServerPlayer target = EntityArgument.getPlayer(ctx, "target");
@@ -653,7 +660,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("warns")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.warn"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .executes(ctx -> {
@@ -691,7 +698,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("unwarn")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> hasCommandPermission(source, "cubechat.warn"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .executes(ctx -> {
@@ -733,8 +740,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("tpl")
-                        .requires(source -> source.hasPermission(2)
-                                || (source.getEntity() instanceof ServerPlayer player && hasPermissionNode(player, "cubechat.tpl")))
+                        .requires(source -> hasCommandPermission(source, "cubechat.tpl"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .executes(ctx -> {
@@ -753,8 +759,7 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("homeother")
-                        .requires(source -> source.hasPermission(2)
-                                || (source.getEntity() instanceof ServerPlayer player && hasPermissionNode(player, "cubechat.home.others")))
+                        .requires(source -> hasCommandPermission(source, "cubechat.home.others"))
                         .then(Commands.argument("target", StringArgumentType.word())
                                 .suggests((ctx, builder) -> suggestKnownPlayerNames(builder))
                                 .then(Commands.argument("home", StringArgumentType.word())
@@ -777,7 +782,6 @@ public class CubeChat {
 
         event.getDispatcher().register(
                 Commands.literal("cuberestart")
-                        .requires(source -> source.hasPermission(2))
                         .then(Commands.literal("status")
                                 .executes(ctx -> {
                                     ctx.getSource().sendSuccess(
@@ -787,6 +791,7 @@ public class CubeChat {
                                     return 1;
                                 }))
                         .then(Commands.literal("reload")
+                                .requires(source -> hasCommandPermission(source, "cubechat.restart"))
                                 .executes(ctx -> {
                                     resetRestartSchedule();
                                     ctx.getSource().sendSuccess(
@@ -796,6 +801,7 @@ public class CubeChat {
                                     return 1;
                                 }))
                         .then(Commands.literal("cancel")
+                                .requires(source -> hasCommandPermission(source, "cubechat.restart"))
                                 .executes(ctx -> {
                                     NEXT_RESTART_MILLIS = -1L;
                                     RESTARTING_NOW = false;
@@ -808,6 +814,7 @@ public class CubeChat {
                                     return 1;
                                 }))
                         .then(Commands.literal("now")
+                                .requires(source -> hasCommandPermission(source, "cubechat.restart"))
                                 .then(Commands.argument("seconds", IntegerArgumentType.integer(5, 3600))
                                         .executes(ctx -> {
                                             int seconds = IntegerArgumentType.getInteger(ctx, "seconds");
@@ -1411,7 +1418,8 @@ public class CubeChat {
             CubeDiscordBridge.sendPlayerMessageToDiscord(
                     getDiscordDisplayName(player, GLOBAL_PREFIX.get()),
                     message,
-                    player.getUUID().toString()
+                    player.getUUID().toString(),
+                    player.getGameProfile().getName()
             );
         }
 
@@ -2381,6 +2389,71 @@ public class CubeChat {
         } catch (Throwable e) {
             return "";
         }
+    }
+
+    private static boolean hasCommandPermission(CommandSourceStack source, String permission) {
+        if (source.hasPermission(2)) {
+            return true;
+        }
+
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            return false;
+        }
+
+        return hasPermissionNode(player, permission);
+    }
+
+    public static boolean shouldShowInDiscordOnlineStatus(ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+
+        if (player.isSpectator() || player.isInvisible()) {
+            return false;
+        }
+
+        if (player.getTags().contains("cubechat_hide_online")
+                || player.getTags().contains("cubechat_hidden")
+                || player.getTags().contains("vanished")
+                || player.getTags().contains("vanish")
+                || player.getTags().contains("hidden")) {
+            return false;
+        }
+
+        if (hasPermissionNode(player, "cubechat.discord.hideonline")) {
+            return false;
+        }
+
+        return !isFtbEssentialsVanished(player);
+    }
+
+    private static boolean isFtbEssentialsVanished(ServerPlayer player) {
+        try {
+            Class<?> dataClass = Class.forName("dev.ftb.mods.ftbessentials.util.FTBEPlayerData");
+            Object optional = dataClass
+                    .getMethod("getOrCreate", net.minecraft.world.entity.player.Player.class)
+                    .invoke(null, player);
+
+            if (!(optional instanceof java.util.Optional<?> opt) || opt.isEmpty()) {
+                return false;
+            }
+
+            Object data = opt.get();
+            String[] methodNames = {"isVanished", "getVanished", "vanished", "isVanish", "getVanish", "vanish"};
+
+            for (String methodName : methodNames) {
+                try {
+                    Object result = data.getClass().getMethod(methodName).invoke(data);
+                    if (result instanceof Boolean value) {
+                        return value;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return false;
     }
 
     private static boolean hasPermissionNode(ServerPlayer player, String permission) {

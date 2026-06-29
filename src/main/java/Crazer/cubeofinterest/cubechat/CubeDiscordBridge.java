@@ -13,6 +13,7 @@ import net.minecraftforge.fml.loading.FMLPaths;
 import org.jetbrains.annotations.NotNull;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -34,6 +35,7 @@ public class CubeDiscordBridge {
     private static boolean sendServerStatus = true;
 
     private static String webhookUrl = "";
+    private static String avatarUrlTemplate = "https://mawlee.org/api/skin-api/skins/%username%.png";
     private static boolean onlineStatusEnabled = false;
     private static String onlineStatusChannelId = "";
     private static int onlineStatusUpdateSeconds = 60;
@@ -45,6 +47,7 @@ public class CubeDiscordBridge {
             boolean bridgeEnabled,
             String token,
             String configuredWebhookUrl,
+            String configuredAvatarUrlTemplate,
             String channelId,
             String logChannelId,
             boolean statusMessages,
@@ -56,6 +59,9 @@ public class CubeDiscordBridge {
         enabled = bridgeEnabled;
         sendServerStatus = statusMessages;
         webhookUrl = configuredWebhookUrl == null ? "" : configuredWebhookUrl.trim();
+        avatarUrlTemplate = configuredAvatarUrlTemplate == null || configuredAvatarUrlTemplate.isBlank()
+                ? ""
+                : configuredAvatarUrlTemplate.trim();
         onlineStatusEnabled = configuredOnlineStatusEnabled;
         onlineStatusChannelId = configuredOnlineStatusChannelId == null ? "" : configuredOnlineStatusChannelId.trim();
         onlineStatusUpdateSeconds = Math.max(15, configuredOnlineStatusUpdateSeconds);
@@ -172,7 +178,7 @@ public class CubeDiscordBridge {
         }
     }
 
-    public static void sendPlayerMessageToDiscord(String username, String message, String uuid) {
+    public static void sendPlayerMessageToDiscord(String username, String message, String uuid, String playerName) {
         if (!enabled || message == null || message.isBlank()) {
             return;
         }
@@ -188,7 +194,7 @@ public class CubeDiscordBridge {
             safeUsername = safeUsername.substring(0, 80);
         }
 
-        String avatarUrl = buildAvatarUrl(uuid);
+        String avatarUrl = buildAvatarUrl(uuid, playerName);
         String payload = "{"
                 + "\"username\":\"" + jsonEscape(safeUsername) + "\","
                 + "\"content\":\"" + jsonEscape(sanitizeMessageForDiscord(message)) + "\","
@@ -211,6 +217,10 @@ public class CubeDiscordBridge {
         } catch (Throwable e) {
             System.out.println("[CubeDiscord] Failed to build webhook request: " + e.getMessage());
         }
+    }
+
+    public static void sendPlayerMessageToDiscord(String username, String message, String uuid) {
+        sendPlayerMessageToDiscord(username, message, uuid, username);
     }
 
     public static void sendToDiscordLog(String message) {
@@ -380,7 +390,10 @@ public class CubeDiscordBridge {
             return "🔴 **Cube Of Interest** — сервер выключен";
         }
 
-        List<ServerPlayer> players = minecraftServer.getPlayerList().getPlayers();
+        List<ServerPlayer> players = minecraftServer.getPlayerList().getPlayers()
+                .stream()
+                .filter(CubeChat::shouldShowInDiscordOnlineStatus)
+                .toList();
         int online = players.size();
         int max = minecraftServer.getPlayerList().getMaxPlayers();
 
@@ -505,15 +518,32 @@ public class CubeDiscordBridge {
                 .replace("@here", "@\u200Bhere");
     }
 
-    private static String buildAvatarUrl(String uuid) {
-        if (uuid == null || uuid.isBlank()) {
+    private static String buildAvatarUrl(String uuid, String playerName) {
+        String template = avatarUrlTemplate;
+        if (template == null || template.isBlank()) {
+            return "";
+        }
+
+        String safeName = playerName == null ? "" : playerName.trim();
+        String safeUuid = uuid == null ? "" : uuid.trim();
+
+        if (safeName.isBlank() && safeUuid.isBlank()) {
             return "";
         }
 
         try {
-            UUID parsed = UUID.fromString(uuid);
-            return "https://crafatar.com/avatars/" + parsed + "?overlay";
-        } catch (Throwable ignored) {
+            String encodedName = URLEncoder.encode(safeName, StandardCharsets.UTF_8).replace("+", "%20");
+            String encodedUuid = URLEncoder.encode(safeUuid, StandardCharsets.UTF_8).replace("+", "%20");
+
+            return template
+                    .replace("%username%", encodedName)
+                    .replace("%name%", encodedName)
+                    .replace("{username}", encodedName)
+                    .replace("{name}", encodedName)
+                    .replace("%uuid%", encodedUuid)
+                    .replace("{uuid}", encodedUuid);
+        } catch (Throwable e) {
+            System.out.println("[CubeDiscord] Failed to build avatar URL: " + e.getMessage());
             return "";
         }
     }
