@@ -132,6 +132,43 @@ public class CubeDiscordBridge {
         }
     }
 
+    public static void reload(
+            MinecraftServer minecraftServer,
+            boolean bridgeEnabled,
+            String token,
+            String configuredWebhookUrl,
+            String configuredAvatarUrlTemplate,
+            String channelId,
+            String logChannelId,
+            boolean statusMessages,
+            boolean configuredOnlineStatusEnabled,
+            String configuredOnlineStatusChannelId,
+            int configuredOnlineStatusUpdateSeconds
+    ) {
+        boolean oldSendServerStatus = sendServerStatus;
+
+        try {
+            sendServerStatus = false;
+            stop();
+        } finally {
+            sendServerStatus = oldSendServerStatus;
+        }
+
+        start(
+                minecraftServer,
+                bridgeEnabled,
+                token,
+                configuredWebhookUrl,
+                configuredAvatarUrlTemplate,
+                channelId,
+                logChannelId,
+                statusMessages,
+                configuredOnlineStatusEnabled,
+                configuredOnlineStatusChannelId,
+                configuredOnlineStatusUpdateSeconds
+        );
+    }
+
     public static void stop() {
         updateOnlineStatusMessageNow();
         stopOnlineStatusUpdater();

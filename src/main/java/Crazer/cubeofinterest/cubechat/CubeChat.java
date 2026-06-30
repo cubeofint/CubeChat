@@ -5,6 +5,8 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import com.electronwill.nightconfig.core.file.CommentedFileConfig;
+import com.electronwill.nightconfig.core.io.WritingMode;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.user.User;
@@ -344,6 +346,42 @@ public class CubeChat {
         }
     }
 
+    private static void reloadCubeChatConfig() {
+        Path configPath = FMLPaths.CONFIGDIR.get().resolve(MODID + "-common.toml");
+
+        CommentedFileConfig configData = CommentedFileConfig.builder(configPath)
+                .sync()
+                .autosave()
+                .writingMode(WritingMode.REPLACE)
+                .build();
+
+        configData.load();
+        CONFIG_SPEC.setConfig(configData);
+
+        resetRestartSchedule();
+        reloadDiscordBridgeFromConfig();
+    }
+
+    private static void reloadDiscordBridgeFromConfig() {
+        if (CURRENT_SERVER == null) {
+            return;
+        }
+
+        CubeDiscordBridge.reload(
+                CURRENT_SERVER,
+                DISCORD_ENABLED.get(),
+                DISCORD_BOT_TOKEN.get(),
+                DISCORD_WEBHOOK_URL.get(),
+                DISCORD_AVATAR_URL_TEMPLATE.get(),
+                DISCORD_CHANNEL_ID.get(),
+                DISCORD_LOG_CHANNEL_ID.get(),
+                DISCORD_SEND_SERVER_STATUS.get(),
+                DISCORD_ONLINE_STATUS_ENABLED.get(),
+                DISCORD_ONLINE_STATUS_CHANNEL_ID.get(),
+                DISCORD_ONLINE_STATUS_UPDATE_SECONDS.get()
+        );
+    }
+
     private enum PunishmentAnnounceType {
         MUTE,
         BAN,
@@ -460,6 +498,26 @@ public class CubeChat {
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
+        event.getDispatcher().register(
+                Commands.literal("cubechat")
+                        .requires(source -> hasCommandPermission(source, "cubechat.reload"))
+                        .then(Commands.literal("reload")
+                                .executes(ctx -> {
+                                    try {
+                                        reloadCubeChatConfig();
+                                        ctx.getSource().sendSuccess(
+                                                () -> Component.literal("§aКонфиг CubeChat перезагружен. Расписание рестартов и Discord bridge обновлены."),
+                                                false
+                                        );
+                                        return 1;
+                                    } catch (Throwable e) {
+                                        ctx.getSource().sendFailure(Component.literal("§cНе удалось перезагрузить конфиг CubeChat: " + e.getMessage()));
+                                        e.printStackTrace();
+                                        return 0;
+                                    }
+                                }))
+        );
+
         event.getDispatcher().register(
                 Commands.literal("chat")
                         .executes(ctx -> {
